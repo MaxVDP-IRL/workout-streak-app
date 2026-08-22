@@ -410,3 +410,7 @@ function showCelebration(pre, post) {
 
 refreshDay();
 renderAll();
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js');
+}

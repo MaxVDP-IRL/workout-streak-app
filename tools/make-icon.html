@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Icon generator</title>
+<p>Right-click / long-press the image and save it as <code>apple-touch-icon.png</code> in the project root.</p>
+<canvas id="c" width="180" height="180"></canvas>
+<script>
+  const ctx = document.getElementById('c').getContext('2d');
+  const s = 1.8; // scale from the 100-unit SVG design
+  ctx.fillStyle = '#111318'; ctx.fillRect(0, 0, 180, 180);
+  ctx.fillStyle = '#ff8c32';
+  ctx.fillRect(14 * s, 40 * s, 8 * s, 20 * s);
+  ctx.fillRect(24 * s, 34 * s, 6 * s, 32 * s);
+  ctx.fillRect(70 * s, 34 * s, 6 * s, 32 * s);
+  ctx.fillRect(78 * s, 40 * s, 8 * s, 20 * s);
+  ctx.fillStyle = '#f2f3f5';
+  ctx.fillRect(30 * s, 47 * s, 40 * s, 6 * s);
+</script>
