@@ -104,3 +104,31 @@ export const EQUIVALENCES = [
 export function equivalencesFor(tonnage) {
   return EQUIVALENCES.filter(e => tonnage >= e.kg);
 }
+
+export function weeklyVolumes(sessions, todayStr, weeks = 8) {
+  const volByDate = {};
+  for (const s of sessions) volByDate[s.date] = (volByDate[s.date] ?? 0) + sessionVolume(s);
+
+  const [y, m, d] = todayStr.split('-').map(Number);
+  const dow = (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7; // 0 = Monday
+  const thisMonday = addDays(todayStr, -dow);
+
+  const out = [];
+  for (let w = weeks - 1; w >= 0; w--) {
+    const weekStart = addDays(thisMonday, -7 * w);
+    let volume = 0;
+    for (let i = 0; i < 7; i++) volume += volByDate[addDays(weekStart, i)] ?? 0;
+    out.push({ weekStart, volume });
+  }
+  return out;
+}
+
+export function heatmapData(sessions, todayStr, days = 112) {
+  const done = new Set(sessions.map(s => s.date));
+  const out = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const date = addDays(todayStr, -i);
+    out.push({ date, done: done.has(date) });
+  }
+  return out;
+}

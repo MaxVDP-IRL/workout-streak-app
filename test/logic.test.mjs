@@ -124,3 +124,25 @@ test('equivalencesFor: returns only unlocked, in ascending order', () => {
   assert.equal(eq[eq.length - 1].label, 'a city bus');
   assert.deepEqual(logic.equivalencesFor(0), []);
 });
+
+test('weeklyVolumes: buckets Monday-start weeks, newest last', () => {
+  // 2026-08-22 is a Saturday; that week's Monday is 2026-08-17.
+  const sessions = [
+    { date: '2026-08-18', sets: [{ kg: 50, reps: 10 }] }, // this week: 500
+    { date: '2026-08-13', sets: [{ kg: 60, reps: 10 }] }, // last week: 600
+  ];
+  const weeks = logic.weeklyVolumes(sessions, '2026-08-22', 3);
+  assert.equal(weeks.length, 3);
+  assert.deepEqual(weeks[2], { weekStart: '2026-08-17', volume: 500 });
+  assert.deepEqual(weeks[1], { weekStart: '2026-08-10', volume: 600 });
+  assert.deepEqual(weeks[0], { weekStart: '2026-08-03', volume: 0 });
+});
+
+test('heatmapData: one entry per day ending today, done flags set', () => {
+  const sessions = [{ date: '2026-08-21', sets: [{ kg: 50, reps: 10 }] }];
+  const map = logic.heatmapData(sessions, '2026-08-22', 7);
+  assert.equal(map.length, 7);
+  assert.deepEqual(map[6], { date: '2026-08-22', done: false });
+  assert.deepEqual(map[5], { date: '2026-08-21', done: true });
+  assert.equal(map[0].date, '2026-08-16');
+});
