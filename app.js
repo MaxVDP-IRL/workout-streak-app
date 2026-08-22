@@ -1,6 +1,15 @@
 import * as logic from './logic.js';
 import * as store from './storage.js';
 
+const BONUS_FACTS = [
+  'Resistance training increases bone density — your skeleton is literally getting stronger.',
+  'Muscle burns calories at rest. Every session raises your idle burn rate.',
+  'Consistency beats intensity: 10 minutes daily outperforms one big session a week.',
+  'The bench press works your chest, shoulders, and triceps in one move.',
+  'After ~66 days, habits run on autopilot. Every day here is a brick in that wall.',
+  'Strength training in your 30s pays compound interest for decades.',
+];
+
 // ---------- State ----------
 const DEFAULT_SETTINGS = { sets: 3, kg: 40, reps: 8 };
 
@@ -176,7 +185,57 @@ document.querySelectorAll('#tabbar .tab').forEach(tab => {
 // Placeholders filled by later tasks.
 function renderStats() {}
 function renderSettings() {}
-function showCelebration(pre, post) { console.log('celebrate', pre, post); }
+function showCelebration(pre, post) {
+  const el = $('#celebration');
+  let badges = '';
+
+  if (post.prs.maxWeight > pre.prs.maxWeight) {
+    badges += `<div class="badge">🏋️ New PR: heaviest lift ${post.prs.maxWeight} kg</div>`;
+  }
+  if (post.prs.maxSessionVolume > pre.prs.maxSessionVolume && pre.tonnage > 0) {
+    badges += `<div class="badge">📈 New PR: biggest session ${post.prs.maxSessionVolume.toLocaleString('en-US')} kg</div>`;
+  }
+  if (post.streak.streak > pre.streak.bestStreak && pre.streak.bestStreak > 0) {
+    badges += `<div class="badge">🔥 New record streak: ${post.streak.streak} days</div>`;
+  }
+  if (post.rank.name !== pre.rank.name) {
+    badges += `<div class="badge">⭐ Rank up: you are now ${post.rank.name}</div>`;
+  }
+  if (post.equivCount > pre.equivCount) {
+    const eq = logic.equivalencesFor(post.tonnage).at(-1);
+    badges += `<div class="badge">🐘 You have now lifted ${eq.label} (${eq.kg.toLocaleString('en-US')} kg)</div>`;
+  }
+  if (post.streak.shields > pre.streak.shields) {
+    badges += `<div class="badge">🛡 Shield earned — 7 straight days</div>`;
+  }
+  // Variable reward: ~1 in 3 sessions drops a bonus fact (only if nothing else fired, to keep it special).
+  if (badges === '' && Math.random() < 1 / 3) {
+    badges += `<div class="badge">💡 ${BONUS_FACTS[Math.floor(Math.random() * BONUS_FACTS.length)]}</div>`;
+  }
+
+  el.innerHTML = `
+    <div class="streak-big">🔥 ${post.streak.streak}</div>
+    <div class="sub">day streak</div>
+    <div class="tonnage-roll" id="tonnage-roll">${pre.tonnage.toLocaleString('en-US')} kg</div>
+    <div class="sub">lifted lifetime</div>
+    ${badges}
+    <button class="close-btn">Nice.</button>`;
+  el.classList.remove('hidden');
+  el.querySelector('.close-btn').addEventListener('click', () => el.classList.add('hidden'));
+
+  // Odometer roll: animate pre → post tonnage over ~1.2s.
+  const rollEl = el.querySelector('#tonnage-roll');
+  const start = performance.now();
+  const dur = 1200;
+  function frame(t) {
+    const p = Math.min(1, (t - start) / dur);
+    const eased = 1 - Math.pow(1 - p, 3);
+    const val = Math.round(pre.tonnage + (post.tonnage - pre.tonnage) * eased);
+    rollEl.textContent = `${val.toLocaleString('en-US')} kg`;
+    if (p < 1) requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
 
 refreshDay();
 renderAll();
