@@ -146,3 +146,21 @@ test('heatmapData: one entry per day ending today, done flags set', () => {
   assert.deepEqual(map[5], { date: '2026-08-21', done: true });
   assert.equal(map[0].date, '2026-08-16');
 });
+
+test('validateBackup: accepts a well-formed backup', () => {
+  const ok = logic.validateBackup({
+    sessions: [{ date: '2026-08-22', sets: [{ kg: 60, reps: 8 }] }],
+    settings: { sets: 3, kg: 60, reps: 8 },
+  });
+  assert.deepEqual(ok, { ok: true });
+});
+
+test('validateBackup: rejects garbage', () => {
+  assert.equal(logic.validateBackup(null).ok, false);
+  assert.equal(logic.validateBackup({}).ok, false);
+  assert.equal(logic.validateBackup({ sessions: 'nope' }).ok, false);
+  assert.equal(logic.validateBackup({ sessions: [{ date: 'someday', sets: [{ kg: 60, reps: 8 }] }] }).ok, false);
+  assert.equal(logic.validateBackup({ sessions: [{ date: '2026-08-22', sets: [] }] }).ok, false);
+  assert.equal(logic.validateBackup({ sessions: [{ date: '2026-08-22', sets: [{ kg: '60', reps: 8 }] }] }).ok, false);
+  assert.equal(logic.validateBackup({ sessions: [{ date: '2026-08-22', sets: [{ kg: 60, reps: 0 }] }] }).ok, false);
+});

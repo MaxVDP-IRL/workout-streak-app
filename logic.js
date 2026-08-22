@@ -132,3 +132,23 @@ export function heatmapData(sessions, todayStr, days = 112) {
   }
   return out;
 }
+
+export function validateBackup(obj) {
+  if (!obj || typeof obj !== 'object') return { ok: false, error: 'Not a backup object' };
+  if (!Array.isArray(obj.sessions)) return { ok: false, error: 'Missing sessions array' };
+  for (const s of obj.sessions) {
+    if (!s || typeof s.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s.date)) {
+      return { ok: false, error: 'Bad session date' };
+    }
+    if (!Array.isArray(s.sets) || s.sets.length === 0) return { ok: false, error: 'Bad session sets' };
+    for (const set of s.sets) {
+      if (!set || typeof set.kg !== 'number' || typeof set.reps !== 'number' || set.kg < 0 || set.reps <= 0) {
+        return { ok: false, error: 'Bad set values' };
+      }
+    }
+  }
+  if (obj.settings !== undefined && (typeof obj.settings !== 'object' || obj.settings === null)) {
+    return { ok: false, error: 'Bad settings' };
+  }
+  return { ok: true };
+}
