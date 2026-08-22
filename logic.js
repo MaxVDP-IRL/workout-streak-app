@@ -69,3 +69,38 @@ export function computePRs(sessions) {
   }
   return { maxWeight, maxSessionVolume };
 }
+
+export const RANKS = [
+  { threshold: 0,      name: 'Novice' },
+  { threshold: 5000,   name: 'Apprentice' },
+  { threshold: 15000,  name: 'Iron Worker' },
+  { threshold: 35000,  name: 'Press Warden' },
+  { threshold: 70000,  name: 'Steel Veteran' },
+  { threshold: 120000, name: 'Iron Champion' },
+  { threshold: 200000, name: 'Bench Master' },
+  { threshold: 350000, name: 'Titan' },
+];
+
+export function rankFor(tonnage) {
+  let idx = 0;
+  for (let i = 0; i < RANKS.length; i++) if (tonnage >= RANKS[i].threshold) idx = i;
+  return { ...RANKS[idx], next: RANKS[idx + 1] ?? null };
+}
+
+export const EQUIVALENCES = [
+  { kg: 1000,    label: 'a small car' },
+  { kg: 3000,    label: 'a full-size SUV' },
+  { kg: 6000,    label: 'an African elephant' },
+  { kg: 12000,   label: 'a city bus' },
+  { kg: 25000,   label: 'a fire truck' },
+  { kg: 40000,   label: 'a loaded semi-truck' },
+  { kg: 75000,   label: 'a Boeing 737' },
+  { kg: 150000,  label: 'a blue whale' },
+  { kg: 225000,  label: 'the Statue of Liberty' },
+  { kg: 440000,  label: 'a fully loaded Boeing 747' },
+  { kg: 1000000, label: 'a small ferry' },
+];
+
+export function equivalencesFor(tonnage) {
+  return EQUIVALENCES.filter(e => tonnage >= e.kg);
+}

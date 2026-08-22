@@ -108,3 +108,19 @@ test('computePRs: heaviest weight and biggest session volume', () => {
   assert.deepEqual(logic.computePRs(sessions), { maxWeight: 65, maxSessionVolume: 992 });
   assert.deepEqual(logic.computePRs([]), { maxWeight: 0, maxSessionVolume: 0 });
 });
+
+test('rankFor: thresholds and next rank', () => {
+  assert.equal(logic.rankFor(0).name, 'Novice');
+  assert.equal(logic.rankFor(4999).name, 'Novice');
+  assert.equal(logic.rankFor(5000).name, 'Apprentice');
+  assert.equal(logic.rankFor(5000).next.name, 'Iron Worker');
+  assert.equal(logic.rankFor(9999999).name, 'Titan');
+  assert.equal(logic.rankFor(9999999).next, null);
+});
+
+test('equivalencesFor: returns only unlocked, in ascending order', () => {
+  const eq = logic.equivalencesFor(13000);
+  assert.equal(eq.length, 4); // small car, SUV, elephant, city bus
+  assert.equal(eq[eq.length - 1].label, 'a city bus');
+  assert.deepEqual(logic.equivalencesFor(0), []);
+});
