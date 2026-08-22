@@ -51,3 +51,21 @@ export function computeStreakState(sessions, todayStr) {
   out.shieldProgress = progress;
   return out;
 }
+
+export function sessionVolume(session) {
+  return session.sets.reduce((sum, s) => sum + s.kg * s.reps, 0);
+}
+
+export function computeTonnage(sessions) {
+  return sessions.reduce((sum, s) => sum + sessionVolume(s), 0);
+}
+
+export function computePRs(sessions) {
+  let maxWeight = 0, maxSessionVolume = 0;
+  for (const s of sessions) {
+    for (const set of s.sets) if (set.kg > maxWeight) maxWeight = set.kg;
+    const vol = sessionVolume(s);
+    if (vol > maxSessionVolume) maxSessionVolume = vol;
+  }
+  return { maxWeight, maxSessionVolume };
+}

@@ -85,3 +85,26 @@ test('streak: two consecutive misses with one shield resets (shield covers only 
   assert.equal(st.streak, 1);   // shield covered the 17th; the 18th killed the streak
   assert.equal(st.bestStreak, 7);
 });
+
+test('sessionVolume: sum of kg*reps over sets', () => {
+  const s = { date: '2026-08-22', sets: [{ kg: 60, reps: 8 }, { kg: 60, reps: 8 }, { kg: 50, reps: 10 }] };
+  assert.equal(logic.sessionVolume(s), 60 * 8 + 60 * 8 + 50 * 10);
+});
+
+test('computeTonnage: sum over all sessions, 0 when empty', () => {
+  const sessions = [
+    { date: '2026-08-21', sets: [{ kg: 60, reps: 8 }] },
+    { date: '2026-08-22', sets: [{ kg: 60, reps: 10 }] },
+  ];
+  assert.equal(logic.computeTonnage(sessions), 480 + 600);
+  assert.equal(logic.computeTonnage([]), 0);
+});
+
+test('computePRs: heaviest weight and biggest session volume', () => {
+  const sessions = [
+    { date: '2026-08-20', sets: [{ kg: 60, reps: 8 }, { kg: 65, reps: 5 }] }, // vol 805
+    { date: '2026-08-21', sets: [{ kg: 62, reps: 8 }, { kg: 62, reps: 8 }] }, // vol 992
+  ];
+  assert.deepEqual(logic.computePRs(sessions), { maxWeight: 65, maxSessionVolume: 992 });
+  assert.deepEqual(logic.computePRs([]), { maxWeight: 0, maxSessionVolume: 0 });
+});
