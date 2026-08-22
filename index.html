@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#111318">
+  <title>Bench</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="topbar">
+    <div id="streak-box">
+      <span id="streak-flame">🔥</span>
+      <span id="streak-count">0</span>
+    </div>
+    <div id="shield-box" title="Shields"></div>
+  </header>
+
+  <main>
+    <section id="view-today" class="view"></section>
+    <section id="view-stats" class="view hidden"></section>
+    <section id="view-settings" class="view hidden"></section>
+  </main>
+
+  <div id="celebration" class="hidden"></div>
+
+  <nav id="tabbar">
+    <button data-view="today" class="tab active">Today</button>
+    <button data-view="stats" class="tab">Stats</button>
+    <button data-view="settings" class="tab">Settings</button>
+  </nav>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
