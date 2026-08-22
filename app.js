@@ -182,8 +182,84 @@ document.querySelectorAll('#tabbar .tab').forEach(tab => {
   });
 });
 
-// Placeholders filled by later tasks.
-function renderStats() {}
+function renderStats() {
+  const view = $('#view-stats');
+  const st = logic.computeStreakState(sessions, today);
+  const tonnage = logic.computeTonnage(sessions);
+  const prs = logic.computePRs(sessions);
+  const rank = logic.rankFor(tonnage);
+  const weeks = logic.weeklyVolumes(sessions, today, 8);
+  const heat = logic.heatmapData(sessions, today, 112);
+
+  // --- Heatmap: 16 columns x 7 rows, GitHub-style (each column = 1 week) ---
+  const cell = 20, gap = 3;
+  let heatSvg = `<svg class="chart" viewBox="0 0 ${16 * (cell + gap)} ${7 * (cell + gap)}">`;
+  heat.forEach((d, i) => {
+    const col = Math.floor(i / 7), row = i % 7;
+    heatSvg += `<rect x="${col * (cell + gap)}" y="${row * (cell + gap)}" width="${cell}" height="${cell}" rx="4"
+      fill="${d.done ? 'var(--good)' : 'var(--surface-2)'}"/>`;
+  });
+  heatSvg += '</svg>';
+
+  // --- Weekly volume bars ---
+  const maxVol = Math.max(1, ...weeks.map(w => w.volume));
+  const bw = 34, bgap = 10, chartH = 120;
+  let barSvg = `<svg class="chart" viewBox="0 0 ${weeks.length * (bw + bgap)} ${chartH + 20}">`;
+  weeks.forEach((w, i) => {
+    const h = Math.round((w.volume / maxVol) * chartH);
+    barSvg += `<rect x="${i * (bw + bgap)}" y="${chartH - h}" width="${bw}" height="${h}" rx="4" fill="var(--accent-2)"/>`;
+    barSvg += `<text x="${i * (bw + bgap) + bw / 2}" y="${chartH + 14}" text-anchor="middle"
+      font-size="9" fill="var(--text-dim)">${w.weekStart.slice(5)}</text>`;
+  });
+  barSvg += '</svg>';
+
+  // --- Rank progress ---
+  const rankPct = rank.next
+    ? Math.round(((tonnage - rank.threshold) / (rank.next.threshold - rank.threshold)) * 100)
+    : 100;
+
+  // --- Equivalences (unlocked + next locked one as a teaser) ---
+  const unlocked = logic.equivalencesFor(tonnage);
+  const nextEq = logic.EQUIVALENCES[unlocked.length] ?? null;
+  let equivHtml = unlocked.map(e => `<li>✅ ${e.label} (${e.kg.toLocaleString('en-US')} kg)</li>`).join('');
+  if (nextEq) equivHtml += `<li class="locked">🔒 ${nextEq.label} (${nextEq.kg.toLocaleString('en-US')} kg)</li>`;
+
+  view.innerHTML = `
+    <h2>Last 16 weeks</h2>
+    <div class="card">${heatSvg}</div>
+
+    <h2>Rank</h2>
+    <div class="card">
+      <div class="rank-name">${rank.name}</div>
+      <div class="stat-label">${rank.next
+        ? `${(rank.next.threshold - tonnage).toLocaleString('en-US')} kg to ${rank.next.name}`
+        : 'Maximum rank reached'}</div>
+      <div class="rank-bar"><div style="width:${rankPct}%"></div></div>
+    </div>
+
+    <h2>Records</h2>
+    <div class="stat-grid">
+      <div class="card"><div class="stat-num">${tonnage.toLocaleString('en-US')}</div><div class="stat-label">kg lifetime</div></div>
+      <div class="card"><div class="stat-num">${st.bestStreak}</div><div class="stat-label">best streak</div></div>
+      <div class="card"><div class="stat-num">${prs.maxWeight}</div><div class="stat-label">kg heaviest lift</div></div>
+      <div class="card"><div class="stat-num">${prs.maxSessionVolume.toLocaleString('en-US')}</div><div class="stat-label">kg best session</div></div>
+    </div>
+
+    <h2>Weekly volume (kg)</h2>
+    <div class="card">${barSvg}</div>
+
+    <h2>You have lifted…</h2>
+    <div class="card"><ul class="equiv-list">${equivHtml}</ul></div>
+    ${exportReminderHtml()}`;
+}
+
+function exportReminderHtml() {
+  const last = store.load('lastExport', null);
+  const stale = !last || (Date.now() - last) > 30 * 24 * 3600 * 1000;
+  if (!stale || sessions.length === 0) return '';
+  return `<p class="hint">💾 No backup in the last 30 days — export your data from Settings.</p>`;
+}
+
 function renderSettings() {}
 function showCelebration(pre, post) {
   const el = $('#celebration');
