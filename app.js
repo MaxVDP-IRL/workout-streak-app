@@ -313,7 +313,9 @@ async function exportBackup() {
     try {
       await navigator.share({ files: [file] });
     } catch (e) {
-      if (e.name === 'AbortError') return; // user cancelled — not an export
+      if (e.name === 'AbortError') return; // user cancelled — not a failure, just not an export either
+      alert('Export failed. Please try again from Settings.');
+      return;
     }
   } else {
     const a = document.createElement('a');
@@ -342,7 +344,7 @@ function importBackup(fileInput) {
       alert(`Backup rejected: ${check.error}. Nothing was changed.`);
       return;
     }
-    if (!confirm(`Replace current data with this backup (${data.sessions.length} sessions)?`)) return;
+    if (!confirm(`Replace your current ${sessions.length} sessions with this backup's ${data.sessions.length} sessions? This cannot be undone.`)) return;
     sessions = data.sessions;
     if (data.settings) settings = { ...DEFAULT_SETTINGS, ...data.settings };
     store.remove('draft');

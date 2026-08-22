@@ -142,7 +142,7 @@ export function validateBackup(obj) {
     }
     if (!Array.isArray(s.sets) || s.sets.length === 0) return { ok: false, error: 'Bad session sets' };
     for (const set of s.sets) {
-      if (!set || typeof set.kg !== 'number' || typeof set.reps !== 'number' || set.kg < 0 || set.reps <= 0) {
+      if (!set || !Number.isFinite(set.kg) || !Number.isFinite(set.reps) || set.kg < 0 || set.reps <= 0) {
         return { ok: false, error: 'Bad set values' };
       }
     }
