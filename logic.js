@@ -13,3 +13,41 @@ export function addDays(dateStr, n) {
   const [y, m, d] = dateStr.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 }
+
+export const SHIELD_EARN_DAYS = 7;
+export const SHIELD_CAP = 2;
+
+export function computeStreakState(sessions, todayStr) {
+  const done = new Set(sessions.map(s => s.date));
+  const out = { streak: 0, bestStreak: 0, shields: 0, shieldProgress: 0, todayDone: done.has(todayStr) };
+  if (done.size === 0) return out;
+
+  const first = [...done].sort()[0];
+  let streak = 0, best = 0, shields = 0, progress = 0;
+
+  for (let d = first; d <= todayStr; d = addDays(d, 1)) {
+    if (done.has(d)) {
+      streak += 1;
+      progress += 1;
+      if (progress === SHIELD_EARN_DAYS) {
+        if (shields < SHIELD_CAP) shields += 1;
+        progress = 0;
+      }
+      if (streak > best) best = streak;
+    } else if (d !== todayStr) {
+      if (shields > 0) {
+        shields -= 1;
+        progress = 0;
+      } else {
+        streak = 0;
+        progress = 0;
+      }
+    }
+  }
+
+  out.streak = streak;
+  out.bestStreak = best;
+  out.shields = shields;
+  out.shieldProgress = progress;
+  return out;
+}
