@@ -260,7 +260,100 @@ function exportReminderHtml() {
   return `<p class="hint">💾 No backup in the last 30 days — export your data from Settings.</p>`;
 }
 
-function renderSettings() {}
+function renderSettings() {
+  const view = $('#view-settings');
+  view.innerHTML = `
+    <h2>Default plan</h2>
+    <div class="card">
+      <div class="settings-row"><span>Sets</span>
+        <span class="stepper" data-s="sets"><button class="dec">−</button><span class="val">${settings.sets}</span><button class="inc">+</button></span>
+      </div>
+      <div class="settings-row"><span>Weight (kg)</span>
+        <span class="stepper" data-s="kg"><button class="dec">−</button><span class="val">${settings.kg}</span><button class="inc">+</button></span>
+      </div>
+      <div class="settings-row"><span>Reps</span>
+        <span class="stepper" data-s="reps"><button class="dec">−</button><span class="val">${settings.reps}</span><button class="inc">+</button></span>
+      </div>
+      <p class="hint">Used when there is no previous session to copy. Day-to-day you adjust directly on the Today screen.</p>
+    </div>
+
+    <h2>Data</h2>
+    <button class="wide-btn" id="export-btn">Export backup (JSON)</button>
+    <button class="wide-btn" id="import-btn">Import backup</button>
+    <input type="file" id="import-file" accept="application/json,.json" style="display:none">
+    <p class="hint">Data lives only on this phone. Export a backup now and then — it is your only insurance.</p>`;
+
+  view.querySelectorAll('.stepper').forEach(stepper => {
+    const field = stepper.dataset.s;
+    const step = field === 'kg' ? 2.5 : 1;
+    const min = field === 'kg' ? 0 : 1;
+    stepper.querySelector('.dec').addEventListener('click', () => {
+      settings[field] = Math.max(min, settings[field] - step);
+      persist(); renderSettings();
+    });
+    stepper.querySelector('.inc').addEventListener('click', () => {
+      settings[field] += step;
+      persist(); renderSettings();
+    });
+  });
+
+  view.querySelector('#export-btn').addEventListener('click', exportBackup);
+  const fileInput = view.querySelector('#import-file');
+  view.querySelector('#import-btn').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => importBackup(fileInput));
+}
+
+async function exportBackup() {
+  const payload = JSON.stringify({ sessions, settings, exportedAt: new Date().toISOString() }, null, 2);
+  const filename = `bench-backup-${today}.json`;
+  const file = new File([payload], filename, { type: 'application/json' });
+
+  // iOS share sheet when available; download link as fallback.
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file] });
+    } catch (e) {
+      if (e.name === 'AbortError') return; // user cancelled — not an export
+    }
+  } else {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([payload], { type: 'application/json' }));
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+  store.save('lastExport', Date.now());
+}
+
+function importBackup(fileInput) {
+  const f = fileInput.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let data;
+    try {
+      data = JSON.parse(reader.result);
+    } catch {
+      alert('That file is not valid JSON. Nothing was changed.');
+      return;
+    }
+    const check = logic.validateBackup(data);
+    if (!check.ok) {
+      alert(`Backup rejected: ${check.error}. Nothing was changed.`);
+      return;
+    }
+    if (!confirm(`Replace current data with this backup (${data.sessions.length} sessions)?`)) return;
+    sessions = data.sessions;
+    if (data.settings) settings = { ...DEFAULT_SETTINGS, ...data.settings };
+    store.remove('draft');
+    draft = loadDraft();
+    persist();
+    renderAll();
+  };
+  reader.readAsText(f);
+  fileInput.value = '';
+}
+
 function showCelebration(pre, post) {
   const el = $('#celebration');
   let badges = '';
