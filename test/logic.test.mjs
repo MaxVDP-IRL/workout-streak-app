@@ -164,3 +164,99 @@ test('validateBackup: rejects garbage', () => {
   assert.equal(logic.validateBackup({ sessions: [{ date: '2026-08-22', sets: [{ kg: '60', reps: 8 }] }] }).ok, false);
   assert.equal(logic.validateBackup({ sessions: [{ date: '2026-08-22', sets: [{ kg: 60, reps: 0 }] }] }).ok, false);
 });
+
+test('validateBackup: accepts a v1 backup with no planks key', () => {
+  const ok = logic.validateBackup({
+    sessions: [{ date: '2026-08-22', sets: [{ kg: 60, reps: 8 }] }],
+    settings: { sets: 3, kg: 60, reps: 8 },
+  });
+  assert.deepEqual(ok, { ok: true });
+});
+
+test('validateBackup: accepts a well-formed planks array', () => {
+  const ok = logic.validateBackup({
+    sessions: [],
+    planks: [{ date: '2026-08-22', seconds: 60 }],
+  });
+  assert.deepEqual(ok, { ok: true });
+});
+
+test('validateBackup: rejects malformed planks', () => {
+  assert.equal(logic.validateBackup({ sessions: [], planks: {} }).ok, false);
+  assert.equal(logic.validateBackup({ sessions: [], planks: [{ date: 'nope', seconds: 60 }] }).ok, false);
+  assert.equal(logic.validateBackup({ sessions: [], planks: [{ date: '2026-08-22', seconds: 0 }] }).ok, false);
+  assert.equal(logic.validateBackup({ sessions: [], planks: [{ date: '2026-08-22', seconds: 'abc' }] }).ok, false);
+});
+
+// ---------- Plank ----------
+
+test('plankRequired: false with no cutover date set — protects all historical days', () => {
+  assert.equal(logic.plankRequired('2026-09-17', undefined), false);
+  assert.equal(logic.plankRequired('2026-09-17', null), false);
+  assert.equal(logic.plankRequired('2026-09-17', ''), false);
+});
+
+test('plankRequired: true on and after the cutover date, false before', () => {
+  assert.equal(logic.plankRequired('2026-09-16', '2026-09-17'), false);
+  assert.equal(logic.plankRequired('2026-09-17', '2026-09-17'), true);
+  assert.equal(logic.plankRequired('2026-09-18', '2026-09-17'), true);
+});
+
+test('plankedOn: requires a qualifying entry on that exact date', () => {
+  assert.equal(logic.plankedOn([], '2026-09-17'), false);
+  assert.equal(logic.plankedOn([{ date: '2026-09-17', seconds: 3 }], '2026-09-17'), false);
+  assert.equal(logic.plankedOn([{ date: '2026-09-17', seconds: 30 }], '2026-09-17'), true);
+  assert.equal(logic.plankedOn([{ date: '2026-09-16', seconds: 30 }], '2026-09-17'), false);
+});
+
+test('plankSecondsOn: sums multiple entries on the same date', () => {
+  const planks = [
+    { date: '2026-09-17', seconds: 30 },
+    { date: '2026-09-17', seconds: 45 },
+    { date: '2026-09-16', seconds: 60 },
+  ];
+  assert.equal(logic.plankSecondsOn(planks, '2026-09-17'), 75);
+});
+
+test('plankTotals: empty log is all zeros', () => {
+  assert.deepEqual(logic.plankTotals([]), { totalSeconds: 0, longest: 0, count: 0, dayCount: 0 });
+});
+
+test('plankTotals: longest is the max single run, dayCount dedupes', () => {
+  const planks = [
+    { date: '2026-09-16', seconds: 40 },
+    { date: '2026-09-17', seconds: 90 },
+    { date: '2026-09-17', seconds: 30 },
+  ];
+  const t = logic.plankTotals(planks);
+  assert.equal(t.totalSeconds, 160);
+  assert.equal(t.longest, 90);
+  assert.equal(t.count, 3);
+  assert.equal(t.dayCount, 2);
+});
+
+test('breakdownDuration: boundary values', () => {
+  assert.deepEqual(logic.breakdownDuration(0), { days: 0, hours: 0, minutes: 0, seconds: 0, totalSeconds: 0 });
+  assert.deepEqual(logic.breakdownDuration(59), { days: 0, hours: 0, minutes: 0, seconds: 59, totalSeconds: 59 });
+  assert.deepEqual(logic.breakdownDuration(60), { days: 0, hours: 0, minutes: 1, seconds: 0, totalSeconds: 60 });
+  assert.deepEqual(logic.breakdownDuration(3599), { days: 0, hours: 0, minutes: 59, seconds: 59, totalSeconds: 3599 });
+  assert.deepEqual(logic.breakdownDuration(3600), { days: 0, hours: 1, minutes: 0, seconds: 0, totalSeconds: 3600 });
+  assert.deepEqual(logic.breakdownDuration(86399), { days: 0, hours: 23, minutes: 59, seconds: 59, totalSeconds: 86399 });
+  assert.deepEqual(logic.breakdownDuration(86400), { days: 1, hours: 0, minutes: 0, seconds: 0, totalSeconds: 86400 });
+  assert.deepEqual(logic.breakdownDuration(90061), { days: 1, hours: 1, minutes: 1, seconds: 1, totalSeconds: 90061 });
+});
+
+test('formatClock: m:ss under an hour, h:mm:ss past it', () => {
+  assert.equal(logic.formatClock(0), '0:00');
+  assert.equal(logic.formatClock(9), '0:09');
+  assert.equal(logic.formatClock(65), '1:05');
+  assert.equal(logic.formatClock(3600), '1:00:00');
+  assert.equal(logic.formatClock(90061), '25:01:01');
+});
+
+test('formatDurationLong: drops leading zero units', () => {
+  assert.equal(logic.formatDurationLong(9), '09s');
+  assert.equal(logic.formatDurationLong(65), '1m 05s');
+  assert.equal(logic.formatDurationLong(3661), '1h 1m 01s');
+  assert.equal(logic.formatDurationLong(90061), '1d 1h 1m 01s');
+});
