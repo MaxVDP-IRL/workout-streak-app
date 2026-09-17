@@ -17,6 +17,22 @@ let sessions = store.load('sessions', []);
 let settings = { ...DEFAULT_SETTINGS, ...store.load('settings', {}) };
 let today = logic.effectiveDate();
 let draft = loadDraft();
+let planks = store.load('planks', []);
+let running = store.load('plankRunning', null);
+let plankTicker = null;
+
+// One-time, idempotent: stamp the date from which a plank is also required.
+// Days already in `sessions` are never re-evaluated, so nothing historical changes.
+if (!settings.plankRequiredFrom) {
+  settings.plankRequiredFrom = today;
+  store.save('settings', settings);
+}
+
+// Stale-run recovery: a timer left running from a previous day was never a completed plank.
+if (running && running.date !== today) {
+  store.remove('plankRunning');
+  running = null;
+}
 
 function loadDraft() {
   const d = store.load('draft', null);
@@ -33,6 +49,25 @@ function persist() {
   store.save('sessions', sessions);
   store.save('settings', settings);
   store.save('draft', draft);
+  store.save('planks', planks);
+}
+
+// ---------- Plank completion gate ----------
+function plankDueToday() {
+  return logic.plankRequired(today, settings.plankRequiredFrom);
+}
+
+function dayComplete() {
+  const benchDone = draft.sets.length > 0 && draft.sets.every(s => s.done);
+  if (!benchDone) return false;
+  return plankDueToday() ? logic.plankedOn(planks, today) : true;
+}
+
+function maybeCompleteSession() {
+  const alreadyDone = sessions.some(s => s.date === today);
+  if (alreadyDone || !dayComplete()) return false;
+  completeSession();
+  return true;
 }
 
 // Recheck the date whenever the app is foregrounded (iOS keeps PWAs alive for days).
@@ -42,6 +77,8 @@ function refreshDay() {
     today = now;
     draft = loadDraft();
     renderAll();
+  } else if (running) {
+    renderToday(); // repaint the clock immediately with the correct elapsed time
   }
 }
 document.addEventListener('visibilitychange', () => {
@@ -68,6 +105,8 @@ function renderTopbar() {
 }
 
 function renderToday() {
+  stopPlankTicker(); // renderToday replaces innerHTML wholesale — never let a stale interval write to detached nodes
+
   const view = $('#view-today');
   const st = logic.computeStreakState(sessions, today);
   const tonnage = logic.computeTonnage(sessions);
@@ -108,8 +147,15 @@ function renderToday() {
           <button class="check-btn ${set.done ? 'checked' : ''}">✓</button>
         </div>`;
     });
-    html += `<p id="today-status">${doneCount} / ${draft.sets.length} sets</p>`;
+    const benchDone = draft.sets.every(s => s.done);
+    if (benchDone && plankDueToday() && !logic.plankedOn(planks, today)) {
+      html += `<p id="today-status" class="comeback">Bench done — plank left to lock in the day.</p>`;
+    } else {
+      html += `<p id="today-status">${doneCount} / ${draft.sets.length} sets</p>`;
+    }
   }
+
+  html += plankCardHtml();
 
   html += `
     <div class="tonnage-ticker">
@@ -138,13 +184,113 @@ function renderToday() {
     row.querySelector('.check-btn').addEventListener('click', () => {
       draft.sets[i].done = !draft.sets[i].done;
       persist();
-      if (draft.sets.every(s => s.done)) {
-        completeSession();
-      } else {
-        renderToday();
-      }
+      if (!maybeCompleteSession()) renderToday();
     });
   });
+
+  view.querySelector('#plank-start-btn')?.addEventListener('click', startPlank);
+  view.querySelector('#plank-stop-btn')?.addEventListener('click', stopPlank);
+
+  if (running) startPlankTicker();
+}
+
+// ---------- Plank timer ----------
+function plankCardHtml() {
+  if (running) {
+    const elapsed = Math.floor((Date.now() - running.startedAt) / 1000);
+    return `
+      <div class="card plank-card">
+        <div class="plank-clock" id="plank-clock">${logic.formatClock(elapsed)}</div>
+        <button class="wide-btn danger" id="plank-stop-btn">Stop plank</button>
+      </div>`;
+  }
+  const secondsToday = logic.plankSecondsOn(planks, today);
+  if (secondsToday > 0) {
+    return `
+      <div class="card plank-card">
+        <div class="plank-done">✓ Plank ${logic.formatClock(secondsToday)} today</div>
+        <button class="wide-btn" id="plank-start-btn">Plank again</button>
+      </div>`;
+  }
+  const hint = plankDueToday() ? `<p class="hint">Plank required for today's streak.</p>` : '';
+  return `
+    <div class="card plank-card">
+      <div class="plank-clock">0:00</div>
+      <button class="wide-btn" id="plank-start-btn">Start plank</button>
+      ${hint}
+    </div>`;
+}
+
+function startPlankTicker() {
+  stopPlankTicker();
+  plankTicker = setInterval(() => {
+    const el = $('#plank-clock');
+    if (!el || !running) return stopPlankTicker();
+    el.textContent = logic.formatClock(Math.floor((Date.now() - running.startedAt) / 1000));
+  }, 250);
+}
+
+function stopPlankTicker() {
+  if (plankTicker) { clearInterval(plankTicker); plankTicker = null; }
+}
+
+let wakeLock = null;
+async function acquireWakeLock() {
+  try {
+    if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+  } catch {
+    // Best-effort only — the timer works fine without it.
+  }
+}
+function releaseWakeLock() {
+  try { wakeLock?.release(); } catch { /* already released */ }
+  wakeLock = null;
+}
+
+function startPlank() {
+  running = { startedAt: Date.now(), date: today };
+  store.save('plankRunning', running);
+  acquireWakeLock();
+  renderToday();
+}
+
+function stopPlank() {
+  const seconds = Math.round((Date.now() - running.startedAt) / 1000);
+  store.remove('plankRunning');
+  running = null;
+  releaseWakeLock();
+
+  if (seconds < logic.PLANK_MIN_SECONDS) {
+    renderToday(); // too short to be a plank; discard silently
+    return;
+  }
+  if (seconds > logic.PLANK_SANITY_SECONDS &&
+      !confirm(`Record ${logic.formatClock(seconds)}? That looks like the timer ran in your pocket.`)) {
+    renderToday();
+    return;
+  }
+
+  const pre = snapshotStats();
+  planks.push({ date: today, seconds, completedAt: new Date().toISOString() });
+  persist();
+  if (!maybeCompleteSession()) {
+    renderAll();
+    maybeCelebratePlankPR(pre);
+  }
+}
+
+function maybeCelebratePlankPR(pre) {
+  const post = snapshotStats();
+  if (post.plank.longest > pre.plank.longest && pre.plank.longest > 0) {
+    showPlankToast(`⏱ New PR: longest plank ${logic.formatClock(post.plank.longest)}`);
+  }
+}
+
+function showPlankToast(text) {
+  const el = $('#celebration');
+  el.innerHTML = `<div class="badge">${text}</div><button class="close-btn">Nice.</button>`;
+  el.classList.remove('hidden');
+  el.querySelector('.close-btn').addEventListener('click', () => el.classList.add('hidden'));
 }
 
 function completeSession() {
@@ -169,6 +315,7 @@ function snapshotStats() {
     prs: logic.computePRs(sessions),
     rank: logic.rankFor(logic.computeTonnage(sessions)),
     equivCount: logic.equivalencesFor(logic.computeTonnage(sessions)).length,
+    plank: logic.plankTotals(planks),
   };
 }
 
@@ -190,6 +337,7 @@ function renderStats() {
   const rank = logic.rankFor(tonnage);
   const weeks = logic.weeklyVolumes(sessions, today, 8);
   const heat = logic.heatmapData(sessions, today, 112);
+  const pt = logic.plankTotals(planks);
 
   // --- Heatmap: 16 columns x 7 rows, GitHub-style (each column = 1 week) ---
   const cell = 20, gap = 3;
@@ -243,6 +391,14 @@ function renderStats() {
       <div class="card"><div class="stat-num">${st.bestStreak}</div><div class="stat-label">best streak</div></div>
       <div class="card"><div class="stat-num">${prs.maxWeight}</div><div class="stat-label">kg heaviest lift</div></div>
       <div class="card"><div class="stat-num">${prs.maxSessionVolume.toLocaleString('en-US')}</div><div class="stat-label">kg best session</div></div>
+    </div>
+
+    <h2>Plank</h2>
+    <div class="stat-grid">
+      <div class="card"><div class="stat-num">${logic.formatClock(pt.longest)}</div><div class="stat-label">longest plank</div></div>
+      <div class="card"><div class="stat-num">${logic.formatDurationLong(pt.totalSeconds)}</div><div class="stat-label">total planked</div></div>
+      <div class="card"><div class="stat-num">${pt.totalSeconds.toLocaleString('en-US')}</div><div class="stat-label">seconds planked</div></div>
+      <div class="card"><div class="stat-num">${pt.dayCount}</div><div class="stat-label">days planked</div></div>
     </div>
 
     <h2>Weekly volume (kg)</h2>
@@ -304,7 +460,7 @@ function renderSettings() {
 }
 
 async function exportBackup() {
-  const payload = JSON.stringify({ sessions, settings, exportedAt: new Date().toISOString() }, null, 2);
+  const payload = JSON.stringify({ sessions, planks, settings, exportedAt: new Date().toISOString() }, null, 2);
   const filename = `bench-backup-${today}.json`;
   const file = new File([payload], filename, { type: 'application/json' });
 
@@ -344,10 +500,17 @@ function importBackup(fileInput) {
       alert(`Backup rejected: ${check.error}. Nothing was changed.`);
       return;
     }
-    if (!confirm(`Replace your current ${sessions.length} sessions with this backup's ${data.sessions.length} sessions? This cannot be undone.`)) return;
+    const incomingPlanks = Array.isArray(data.planks) ? data.planks : [];
+    if (!confirm(`Replace your current ${sessions.length} sessions and ${planks.length} planks with this backup's ${data.sessions.length} sessions and ${incomingPlanks.length} planks? This cannot be undone.`)) return;
     sessions = data.sessions;
+    planks = incomingPlanks;
     if (data.settings) settings = { ...DEFAULT_SETTINGS, ...data.settings };
+    // An old, pre-plank backup has no plankRequiredFrom — re-stamp it now rather than
+    // leaving the requirement silently off until the next page load.
+    if (!settings.plankRequiredFrom) settings.plankRequiredFrom = today;
     store.remove('draft');
+    store.remove('plankRunning');
+    running = null;
     draft = loadDraft();
     persist();
     renderAll();
@@ -378,6 +541,9 @@ function showCelebration(pre, post) {
   }
   if (post.streak.shields > pre.streak.shields) {
     badges += `<div class="badge">🛡 Shield earned — 7 straight days</div>`;
+  }
+  if (post.plank.longest > pre.plank.longest && pre.plank.longest > 0) {
+    badges += `<div class="badge">⏱ New PR: longest plank ${logic.formatClock(post.plank.longest)}</div>`;
   }
   // Variable reward: ~1 in 3 sessions drops a bonus fact (only if nothing else fired, to keep it special).
   if (badges === '' && Math.random() < 1 / 3) {

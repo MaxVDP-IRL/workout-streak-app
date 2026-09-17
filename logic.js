@@ -147,8 +147,74 @@ export function validateBackup(obj) {
       }
     }
   }
+  if (obj.planks !== undefined) {
+    if (!Array.isArray(obj.planks)) return { ok: false, error: 'Bad planks' };
+    for (const p of obj.planks) {
+      if (!p || typeof p.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(p.date)) {
+        return { ok: false, error: 'Bad plank date' };
+      }
+      if (!Number.isFinite(p.seconds) || p.seconds <= 0) return { ok: false, error: 'Bad plank seconds' };
+    }
+  }
   if (obj.settings !== undefined && (typeof obj.settings !== 'object' || obj.settings === null)) {
     return { ok: false, error: 'Bad settings' };
   }
   return { ok: true };
+}
+
+// ---------- Plank ----------
+export const PLANK_MIN_SECONDS = 5;          // shorter than this is a mis-tap, not a plank
+export const PLANK_SANITY_SECONDS = 2 * 3600; // longer than this: confirm before recording
+
+export function plankRequired(dateStr, plankRequiredFrom) {
+  return Boolean(plankRequiredFrom) && dateStr >= plankRequiredFrom;
+}
+
+export function plankSecondsOn(planks, dateStr) {
+  return planks.reduce((sum, p) => (p.date === dateStr ? sum + p.seconds : sum), 0);
+}
+
+export function plankedOn(planks, dateStr) {
+  return planks.some(p => p.date === dateStr && p.seconds >= PLANK_MIN_SECONDS);
+}
+
+export function plankTotals(planks) {
+  let totalSeconds = 0, longest = 0;
+  const days = new Set();
+  for (const p of planks) {
+    totalSeconds += p.seconds;
+    if (p.seconds > longest) longest = p.seconds;
+    days.add(p.date);
+  }
+  return { totalSeconds, longest, count: planks.length, dayCount: days.size };
+}
+
+export function breakdownDuration(totalSeconds) {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  return {
+    days: Math.floor(s / 86400),
+    hours: Math.floor((s % 86400) / 3600),
+    minutes: Math.floor((s % 3600) / 60),
+    seconds: s % 60,
+    totalSeconds: s,
+  };
+}
+
+// Clock face for the running timer and for single-plank figures: m:ss, or h:mm:ss past an hour.
+export function formatClock(totalSeconds) {
+  const { days, hours, minutes, seconds } = breakdownDuration(totalSeconds);
+  const h = days * 24 + hours;
+  const pad = n => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
+}
+
+// Long form for the cumulative figure: "2d 3h 14m 09s", dropping leading zero units.
+export function formatDurationLong(totalSeconds) {
+  const b = breakdownDuration(totalSeconds);
+  const parts = [];
+  if (b.days) parts.push(`${b.days}d`);
+  if (b.days || b.hours) parts.push(`${b.hours}h`);
+  if (b.days || b.hours || b.minutes) parts.push(`${b.minutes}m`);
+  parts.push(`${String(b.seconds).padStart(2, '0')}s`);
+  return parts.join(' ');
 }
