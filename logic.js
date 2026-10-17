@@ -133,6 +133,47 @@ export function heatmapData(sessions, todayStr, days = 112) {
   return out;
 }
 
+// Today and any earlier day can be logged. Tomorrow cannot.
+export function canLogDate(dateStr, todayStr) {
+  return typeof dateStr === 'string'
+    && typeof todayStr === 'string'
+    && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)
+    && /^\d{4}-\d{2}-\d{2}$/.test(todayStr)
+    && dateStr <= todayStr;
+}
+
+// Insert or replace one day's bench session. Other sessions are left in place,
+// including a second row that already shares the date, so a backfill cannot drop history.
+// Streaks, shields, and stats are not stored here — callers recompute them from the result.
+export function applyBackfill(sessions, todayStr, session) {
+  if (!Array.isArray(sessions)) return { ok: false, error: 'Missing sessions array', sessions: [] };
+  if (!session || !canLogDate(session.date, todayStr)) {
+    return { ok: false, error: 'Only today or a past day can be logged', sessions };
+  }
+  if (!Array.isArray(session.sets) || session.sets.length === 0) {
+    return { ok: false, error: 'Need at least one set', sessions };
+  }
+  for (const set of session.sets) {
+    if (!set || !Number.isFinite(set.kg) || !Number.isFinite(set.reps) || set.kg < 0 || set.reps <= 0) {
+      return { ok: false, error: 'Bad set values', sessions };
+    }
+  }
+
+  const sets = session.sets.map(s => ({ kg: s.kg, reps: s.reps }));
+  const idx = sessions.findIndex(s => s && s.date === session.date);
+  if (idx === -1) {
+    const completedAt = typeof session.completedAt === 'string' ? session.completedAt : null;
+    return {
+      ok: true,
+      created: true,
+      sessions: [...sessions, { date: session.date, sets, completedAt }],
+    };
+  }
+
+  const next = sessions.map((s, i) => (i === idx ? { ...s, sets } : s));
+  return { ok: true, created: false, sessions: next };
+}
+
 export function validateBackup(obj) {
   if (!obj || typeof obj !== 'object') return { ok: false, error: 'Not a backup object' };
   if (!Array.isArray(obj.sessions)) return { ok: false, error: 'Missing sessions array' };
@@ -176,6 +217,30 @@ export function plankSecondsOn(planks, dateStr) {
 
 export function plankedOn(planks, dateStr) {
   return planks.some(p => p.date === dateStr && p.seconds >= PLANK_MIN_SECONDS);
+}
+
+// A finished bench day, plus a plank once that requirement is in force.
+// Days before the cutover stay completable from bench sets alone.
+export function dayRequirementsMet(dateStr, setsDone, planks, plankRequiredFrom) {
+  if (!setsDone) return false;
+  if (!plankRequired(dateStr, plankRequiredFrom)) return true;
+  return plankedOn(planks ?? [], dateStr);
+}
+
+// Append one plank. Existing entries are never rewritten.
+export function appendPlank(planks, todayStr, entry) {
+  if (!Array.isArray(planks)) return { ok: false, error: 'Missing planks array', planks: [] };
+  if (!entry || !canLogDate(entry.date, todayStr)) {
+    return { ok: false, error: 'Only today or a past day can be logged', planks };
+  }
+  if (!Number.isFinite(entry.seconds) || entry.seconds < PLANK_MIN_SECONDS) {
+    return { ok: false, error: 'Plank too short', planks };
+  }
+  const completedAt = typeof entry.completedAt === 'string' ? entry.completedAt : null;
+  return {
+    ok: true,
+    planks: [...planks, { date: entry.date, seconds: entry.seconds, completedAt }],
+  };
 }
 
 export function plankTotals(planks) {

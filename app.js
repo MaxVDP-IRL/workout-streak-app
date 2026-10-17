@@ -16,8 +16,12 @@ const DEFAULT_SETTINGS = { sets: 3, kg: 40, reps: 8 };
 let sessions = store.load('sessions', []);
 let settings = { ...DEFAULT_SETTINGS, ...store.load('settings', {}) };
 let today = logic.effectiveDate();
-let draft = loadDraft();
 let planks = store.load('planks', []);
+let pastDrafts = loadPastDrafts();
+const rescuedStaleDraft = rescueStaleDraft();
+let draft = loadDraft();
+let viewDate = today;
+let plankEntrySeconds = 60;
 let running = store.load('plankRunning', null);
 let plankTicker = null;
 
@@ -27,6 +31,7 @@ if (!settings.plankRequiredFrom) {
   settings.plankRequiredFrom = today;
   store.save('settings', settings);
 }
+if (rescuedStaleDraft) persist();
 
 // Stale-run recovery: a timer left running from a previous day was never a completed plank.
 if (running && running.date !== today) {
@@ -34,15 +39,55 @@ if (running && running.date !== today) {
   running = null;
 }
 
+// Prefill from the closest earlier session. With none, use the earliest logged day, else settings.
+function templateSets(date) {
+  const earlier = sessions
+    .filter(s => s.date < date)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .at(-1);
+  const source = earlier ?? [...sessions].sort((a, b) => a.date.localeCompare(b.date))[0];
+  if (source) return source.sets.map(s => ({ kg: s.kg, reps: s.reps, done: false }));
+  return Array.from({ length: settings.sets }, () => ({ kg: settings.kg, reps: settings.reps, done: false }));
+}
+
+function cleanSetDraft(sets) {
+  if (!Array.isArray(sets) || sets.length === 0) return null;
+  const clean = [];
+  for (const s of sets) {
+    if (!s || !Number.isFinite(s.kg) || !Number.isFinite(s.reps)) return null;
+    clean.push({ kg: s.kg, reps: s.reps, done: Boolean(s.done) });
+  }
+  return clean;
+}
+
+function loadPastDrafts() {
+  const raw = store.load('pastDrafts', {});
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  for (const [date, sets] of Object.entries(raw)) {
+    if (date === today || !logic.canLogDate(date, today)) continue;
+    if (sessions.some(s => s.date === date)) continue;
+    const clean = cleanSetDraft(sets);
+    if (clean) out[date] = clean;
+  }
+  return out;
+}
+
+// A draft left open before the 3 a.m. boundary belongs to that day, not to the new today.
+function rescueStaleDraft() {
+  const d = store.load('draft', null);
+  if (!d || d.date === today || !logic.canLogDate(d.date, today)) return false;
+  if (sessions.some(s => s.date === d.date) || pastDrafts[d.date]) return false;
+  const clean = cleanSetDraft(d.sets);
+  if (!clean) return false;
+  pastDrafts[d.date] = clean;
+  return true;
+}
+
 function loadDraft() {
   const d = store.load('draft', null);
-  if (d && d.date === today) return d;
-  // Fresh draft: pre-fill from the most recent session, else settings defaults.
-  const last = [...sessions].sort((a, b) => a.date.localeCompare(b.date)).at(-1);
-  const template = last
-    ? last.sets.map(s => ({ kg: s.kg, reps: s.reps, done: false }))
-    : Array.from({ length: settings.sets }, () => ({ kg: settings.kg, reps: settings.reps, done: false }));
-  return { date: today, sets: template };
+  if (d && d.date === today && Array.isArray(d.sets) && d.sets.length > 0) return d;
+  return { date: today, sets: templateSets(today) };
 }
 
 function persist() {
@@ -50,6 +95,7 @@ function persist() {
   store.save('settings', settings);
   store.save('draft', draft);
   store.save('planks', planks);
+  store.save('pastDrafts', pastDrafts);
 }
 
 // ---------- Plank completion gate ----------
@@ -57,25 +103,40 @@ function plankDueToday() {
   return logic.plankRequired(today, settings.plankRequiredFrom);
 }
 
-function dayComplete() {
-  const benchDone = draft.sets.length > 0 && draft.sets.every(s => s.done);
-  if (!benchDone) return false;
-  return plankDueToday() ? logic.plankedOn(planks, today) : true;
+function sessionFor(date) {
+  return sessions.find(s => s.date === date) ?? null;
 }
 
-function maybeCompleteSession() {
-  const alreadyDone = sessions.some(s => s.date === today);
-  if (alreadyDone || !dayComplete()) return false;
-  completeSession();
-  return true;
+function setsFor(date) {
+  if (date === today) return draft.sets;
+  const session = sessionFor(date);
+  if (session) return session.sets.map(s => ({ kg: s.kg, reps: s.reps, done: true }));
+  if (pastDrafts[date]) return pastDrafts[date];
+  return templateSets(date);
+}
+
+function editablePastSets(date) {
+  if (!pastDrafts[date]) pastDrafts[date] = templateSets(date).map(s => ({ ...s }));
+  return pastDrafts[date];
 }
 
 // Recheck the date whenever the app is foregrounded (iOS keeps PWAs alive for days).
 function refreshDay() {
   const now = logic.effectiveDate();
   if (now !== today) {
+    const previous = today;
+    if (draft && draft.date === previous && !sessions.some(s => s.date === previous)) {
+      const clean = cleanSetDraft(draft.sets);
+      if (clean) pastDrafts[previous] = clean;
+    }
     today = now;
     draft = loadDraft();
+    if (!logic.canLogDate(viewDate, today)) viewDate = today;
+    if (running && running.date !== today) {
+      store.remove('plankRunning');
+      running = null;
+    }
+    persist();
     renderAll();
   } else if (running) {
     renderToday(); // repaint the clock immediately with the correct elapsed time
@@ -104,36 +165,92 @@ function renderTopbar() {
     `<span class="shield-slot-empty">${'🛡'.repeat(logic.SHIELD_CAP - st.shields)}</span>`;
 }
 
+function daysBefore(earlier, later) {
+  const [y1, m1, d1] = earlier.split('-').map(Number);
+  const [y2, m2, d2] = later.split('-').map(Number);
+  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000);
+}
+
+function formatDay(date) {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC',
+  }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+function dayNavHtml() {
+  const onToday = viewDate === today;
+  const yesterday = logic.addDays(today, -1);
+  const title = onToday ? 'Today' : viewDate === yesterday ? 'Yesterday' : formatDay(viewDate);
+  const sub = onToday || viewDate === yesterday
+    ? formatDay(viewDate)
+    : `${daysBefore(viewDate, today)} days ago`;
+  const label = onToday
+    ? `<div class="day-label" id="day-label">
+         <span class="day-nav-title">${title}</span>
+         <span class="day-nav-sub">${sub}</span>
+       </div>`
+    : `<button type="button" class="day-label" id="day-label" aria-label="Return to today">
+         <span class="day-nav-title">${title}</span>
+         <span class="day-nav-sub">${sub}</span>
+       </button>`;
+  return `
+    <div class="day-nav">
+      <button type="button" class="day-arrow" id="day-prev" aria-label="Previous day">‹</button>
+      ${label}
+      <button type="button" class="day-arrow" id="day-next" aria-label="Next day" ${onToday ? 'disabled' : ''}>›</button>
+    </div>`;
+}
+
+function showDate(date) {
+  if (!logic.canLogDate(date, today)) return;
+  if (date !== viewDate) plankEntrySeconds = 60;
+  viewDate = date;
+  renderToday();
+}
+
 function renderToday() {
   stopPlankTicker(); // renderToday replaces innerHTML wholesale — never let a stale interval write to detached nodes
 
   const view = $('#view-today');
   const st = logic.computeStreakState(sessions, today);
   const tonnage = logic.computeTonnage(sessions);
-  const doneCount = draft.sets.filter(s => s.done).length;
+  const onToday = viewDate === today;
+  const logged = Boolean(sessionFor(viewDate));
+  const sets = setsFor(viewDate);
+  const doneCount = sets.filter(s => s.done).length;
+  const benchDone = sets.length > 0 && sets.every(s => s.done);
+  const plankDue = logic.plankRequired(viewDate, settings.plankRequiredFrom);
 
-  let html = '';
+  let html = dayNavHtml();
 
-  // Comeback framing after a reset (had history, streak is now small).
-  if (!st.todayDone && st.streak === 0 && st.bestStreak > 0) {
+  // Comeback framing and the shield notice describe *today*, so they stay put while browsing earlier days.
+  if (onToday && !st.todayDone && st.streak === 0 && st.bestStreak > 0) {
     html += `<p class="comeback">Day 1 of the rebuild. Best: ${st.bestStreak} days — go take it back.</p>`;
   }
 
-  // Plain-spoken shield-burn notice: yesterday was missed but the streak survived,
-  // which can only mean a shield burned covering it.
   const yesterday = logic.addDays(today, -1);
   const doneDates = new Set(sessions.map(s => s.date));
-  if (st.streak > 0 && !st.todayDone && !doneDates.has(yesterday)) {
-    html += `<p class="comeback">🛡 Shield burned covering yesterday. ${st.shields} remaining.</p>`;
+  if (onToday && st.streak > 0 && !st.todayDone && !doneDates.has(yesterday)) {
+    html += `<p class="comeback">🛡 Shield burned covering yesterday. ${st.shields}&nbsp;remaining.</p>`;
+  }
+  const hasEarlier = sessions.some(s => s.date < today);
+  if (onToday && hasEarlier && !doneDates.has(yesterday)) {
+    html += `<p class="hint day-hint">Missed logging yesterday? Tap ‹ to add it.</p>`;
+  }
+  if (!onToday && !logged) {
+    html += `<p class="hint day-hint">Check each set you did. This day then counts toward your streak.</p>`;
   }
 
-  if (st.todayDone) {
+  const showEditor = !(onToday && st.todayDone);
+  if (!showEditor) {
     html += `<p id="today-status" class="done-msg">Done for today. See you tomorrow. 🔥</p>`;
   } else {
-    html += `<h2>Today's bench</h2>`;
-    draft.sets.forEach((set, i) => {
+    html += `<h2>${onToday ? "Today's bench" : 'Bench'}</h2>`;
+    const locked = logged && !onToday;
+    sets.forEach((set, i) => {
       html += `
-        <div class="set-row ${set.done ? 'done' : ''}" data-i="${i}">
+        <div class="set-row ${set.done && !locked ? 'done' : ''} ${locked ? 'logged' : ''}" data-i="${i}">
           <div class="set-values">
             <span class="stepper" data-field="kg">
               <button class="dec">−</button><span class="val">${set.kg}</span><button class="inc">+</button>
@@ -144,14 +261,17 @@ function renderToday() {
             </span>
             <span class="unit">reps</span>
           </div>
-          <button class="check-btn ${set.done ? 'checked' : ''}">✓</button>
+          <button class="check-btn ${set.done ? 'checked' : ''} ${locked ? 'locked' : ''}">✓</button>
         </div>`;
     });
-    const benchDone = draft.sets.every(s => s.done);
-    if (benchDone && plankDueToday() && !logic.plankedOn(planks, today)) {
-      html += `<p id="today-status" class="comeback">Bench done — plank left to lock in the day.</p>`;
+    if (locked) {
+      html += `<p id="today-status" class="done-msg">Logged. Adjust weight or reps if this day was off.</p>`;
+    } else if (benchDone && plankDue && !logic.plankedOn(planks, viewDate)) {
+      html += `<p id="today-status" class="comeback">${onToday
+        ? 'Bench done — plank left to lock in the day.'
+        : 'Bench done — plank left to lock in this day.'}</p>`;
     } else {
-      html += `<p id="today-status">${doneCount} / ${draft.sets.length} sets</p>`;
+      html += `<p id="today-status">${doneCount} / ${sets.length} sets</p>`;
     }
   }
 
@@ -165,45 +285,91 @@ function renderToday() {
 
   view.innerHTML = html;
 
-  // Wire steppers and checks.
-  view.querySelectorAll('.set-row').forEach(row => {
-    const i = Number(row.dataset.i);
-    row.querySelectorAll('.stepper').forEach(stepper => {
-      const field = stepper.dataset.field;
-      const step = field === 'kg' ? 2.5 : 1;
-      const min = field === 'kg' ? 0 : 1;
-      stepper.querySelector('.dec').addEventListener('click', () => {
-        draft.sets[i][field] = Math.max(min, draft.sets[i][field] - step);
-        persist(); renderToday();
+  view.querySelector('#day-prev').addEventListener('click', () => showDate(logic.addDays(viewDate, -1)));
+  view.querySelector('#day-next').addEventListener('click', () => showDate(logic.addDays(viewDate, 1)));
+  view.querySelector('button#day-label')?.addEventListener('click', () => showDate(today));
+
+  if (showEditor) {
+    view.querySelectorAll('.set-row').forEach(row => {
+      const i = Number(row.dataset.i);
+      row.querySelectorAll('.stepper').forEach(stepper => {
+        const field = stepper.dataset.field;
+        const step = field === 'kg' ? 2.5 : 1;
+        const min = field === 'kg' ? 0 : 1;
+        stepper.querySelector('.dec').addEventListener('click', () => changeSet(i, field, -step, min));
+        stepper.querySelector('.inc').addEventListener('click', () => changeSet(i, field, step, min));
       });
-      stepper.querySelector('.inc').addEventListener('click', () => {
-        draft.sets[i][field] += step;
-        persist(); renderToday();
-      });
+      row.querySelector('.check-btn').addEventListener('click', () => toggleSet(i));
     });
-    row.querySelector('.check-btn').addEventListener('click', () => {
-      draft.sets[i].done = !draft.sets[i].done;
-      persist();
-      if (!maybeCompleteSession()) renderToday();
-    });
-  });
+  }
 
   view.querySelector('#plank-start-btn')?.addEventListener('click', startPlank);
   view.querySelector('#plank-stop-btn')?.addEventListener('click', stopPlank);
+  view.querySelector('#plank-log-btn')?.addEventListener('click', logPastPlank);
+  view.querySelector('#plank-entry-dec')?.addEventListener('click', () => {
+    plankEntrySeconds = Math.max(logic.PLANK_MIN_SECONDS, plankEntrySeconds - 5);
+    renderToday();
+  });
+  view.querySelector('#plank-entry-inc')?.addEventListener('click', () => {
+    plankEntrySeconds = Math.min(logic.PLANK_SANITY_SECONDS, plankEntrySeconds + 5);
+    renderToday();
+  });
 
   if (running) startPlankTicker();
 }
 
+function changeSet(i, field, delta, min) {
+  if (viewDate === today) {
+    if (sessionFor(today)) return;
+    draft.sets[i][field] = Math.max(min, draft.sets[i][field] + delta);
+    persist();
+    renderToday();
+    return;
+  }
+  const existing = sessionFor(viewDate);
+  if (existing) {
+    const sets = existing.sets.map(s => ({ kg: s.kg, reps: s.reps, done: true }));
+    sets[i][field] = Math.max(min, sets[i][field] + delta);
+    updateLoggedSets(viewDate, sets);
+    return;
+  }
+  const sets = editablePastSets(viewDate);
+  sets[i][field] = Math.max(min, sets[i][field] + delta);
+  persist();
+  renderToday();
+}
+
+function toggleSet(i) {
+  if (viewDate !== today && sessionFor(viewDate)) return;
+  if (viewDate === today) {
+    draft.sets[i].done = !draft.sets[i].done;
+    persist();
+    if (!tryComplete(today, draft.sets)) renderToday();
+    return;
+  }
+  const sets = editablePastSets(viewDate);
+  sets[i].done = !sets[i].done;
+  persist();
+  if (!tryComplete(viewDate, sets)) renderToday();
+}
+
+function updateLoggedSets(date, sets) {
+  const result = logic.applyBackfill(sessions, today, {
+    date,
+    sets: sets.map(s => ({ kg: s.kg, reps: s.reps })),
+  });
+  if (!result.ok) return;
+  sessions = result.sessions;
+  persist();
+  renderAll();
+}
+
 // ---------- Plank timer ----------
 function plankCardHtml() {
-  if (running) {
-    const elapsed = Math.floor((Date.now() - running.startedAt) / 1000);
-    return `
-      <div class="card plank-card">
-        <div class="plank-clock" id="plank-clock">${logic.formatClock(elapsed)}</div>
-        <button class="wide-btn danger" id="plank-stop-btn">Stop plank</button>
-      </div>`;
+  if (viewDate !== today) {
+    return (running ? liveTimerCard(true) : '') + pastPlankCard();
   }
+  if (running) return liveTimerCard(false);
   const secondsToday = logic.plankSecondsOn(planks, today);
   if (secondsToday > 0) {
     return `
@@ -217,6 +383,38 @@ function plankCardHtml() {
     <div class="card plank-card">
       <div class="plank-clock">0:00</div>
       <button class="wide-btn" id="plank-start-btn">Start plank</button>
+      ${hint}
+    </div>`;
+}
+
+function liveTimerCard(awayFromToday) {
+  const elapsed = Math.floor((Date.now() - running.startedAt) / 1000);
+  const note = awayFromToday ? `<p class="hint">This timer is for today.</p>` : '';
+  return `
+    <div class="card plank-card">
+      <div class="plank-clock" id="plank-clock">${logic.formatClock(elapsed)}</div>
+      <button class="wide-btn danger" id="plank-stop-btn">Stop plank</button>
+      ${note}
+    </div>`;
+}
+
+function pastPlankCard() {
+  const seconds = logic.plankSecondsOn(planks, viewDate);
+  const logged = logic.plankedOn(planks, viewDate);
+  const required = logic.plankRequired(viewDate, settings.plankRequiredFrom);
+  const doneLine = logged ? `<div class="plank-done">✓ Plank ${logic.formatClock(seconds)}</div>` : '';
+  const hint = required && !logged ? `<p class="hint">Plank required to lock in this day.</p>` : '';
+  return `
+    <div class="card plank-card">
+      ${doneLine}
+      <div class="plank-entry">
+        <span class="stepper">
+          <button type="button" class="dec" id="plank-entry-dec">−</button>
+          <span class="val">${logic.formatClock(plankEntrySeconds)}</span>
+          <button type="button" class="inc" id="plank-entry-inc">+</button>
+        </span>
+        <button type="button" class="wide-btn" id="plank-log-btn">${logged ? 'Add another plank' : 'Log plank'}</button>
+      </div>
       ${hint}
     </div>`;
 }
@@ -256,6 +454,7 @@ function startPlank() {
 
 function stopPlank() {
   const seconds = Math.round((Date.now() - running.startedAt) / 1000);
+  const date = running.date;
   store.remove('plankRunning');
   running = null;
   releaseWakeLock();
@@ -271,9 +470,36 @@ function stopPlank() {
   }
 
   const pre = snapshotStats();
-  planks.push({ date: today, seconds, completedAt: new Date().toISOString() });
+  const added = logic.appendPlank(planks, today, {
+    date,
+    seconds,
+    completedAt: new Date().toISOString(),
+  });
+  if (!added.ok) {
+    renderToday();
+    return;
+  }
+  planks = added.planks;
   persist();
-  if (!maybeCompleteSession()) {
+  if (!tryComplete(date, setsFor(date))) {
+    renderAll();
+    maybeCelebratePlankPR(pre);
+  }
+}
+
+function logPastPlank() {
+  if (!logic.canLogDate(viewDate, today) || viewDate === today) return;
+  const pre = snapshotStats();
+  const added = logic.appendPlank(planks, today, {
+    date: viewDate,
+    seconds: plankEntrySeconds,
+    completedAt: new Date().toISOString(),
+  });
+  if (!added.ok) return;
+  planks = added.planks;
+  plankEntrySeconds = 60;
+  persist();
+  if (!tryComplete(viewDate, setsFor(viewDate))) {
     renderAll();
     maybeCelebratePlankPR(pre);
   }
@@ -293,19 +519,29 @@ function showPlankToast(text) {
   el.querySelector('.close-btn').addEventListener('click', () => el.classList.add('hidden'));
 }
 
-function completeSession() {
+function tryComplete(date, sets) {
+  const setsDone = Array.isArray(sets) && sets.length > 0 && sets.every(s => s.done);
+  if (!logic.dayRequirementsMet(date, setsDone, planks, settings.plankRequiredFrom)) return false;
+  if (sessionFor(date)) return false;
   const pre = snapshotStats();
-  sessions.push({
-    date: today,
-    sets: draft.sets.map(s => ({ kg: s.kg, reps: s.reps })),
+  const result = logic.applyBackfill(sessions, today, {
+    date,
+    sets: sets.map(s => ({ kg: s.kg, reps: s.reps })),
     completedAt: new Date().toISOString(),
   });
-  store.remove('draft');
-  draft = { date: today, sets: draft.sets }; // keep for display; todayDone hides it
+  if (!result.ok || !result.created) return false;
+  sessions = result.sessions;
+  if (date === today) {
+    store.remove('draft');
+    draft = { date: today, sets: sets.map(s => ({ ...s })) };
+  } else {
+    delete pastDrafts[date];
+  }
   persist();
   const post = snapshotStats();
   renderAll();
   showCelebration(pre, post);
+  return true;
 }
 
 function snapshotStats() {
@@ -511,6 +747,8 @@ function importBackup(fileInput) {
     store.remove('draft');
     store.remove('plankRunning');
     running = null;
+    pastDrafts = {};
+    viewDate = today;
     draft = loadDraft();
     persist();
     renderAll();
