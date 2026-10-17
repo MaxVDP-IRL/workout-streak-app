@@ -260,3 +260,214 @@ test('formatDurationLong: drops leading zero units', () => {
   assert.equal(logic.formatDurationLong(3661), '1h 1m 01s');
   assert.equal(logic.formatDurationLong(90061), '1d 1h 1m 01s');
 });
+
+// ---------- Backfill ----------
+
+const bench = (date, sets = [{ kg: 60, reps: 8 }]) => ({ date, sets, completedAt: `at-${date}` });
+
+test('canLogDate: today and the past are loggable, the future is not', () => {
+  assert.equal(logic.canLogDate('2026-08-22', '2026-08-22'), true);
+  assert.equal(logic.canLogDate('2026-08-21', '2026-08-22'), true);
+  assert.equal(logic.canLogDate('2026-08-23', '2026-08-22'), false);
+  assert.equal(logic.canLogDate('2026-8-22', '2026-08-22'), false);
+  assert.equal(logic.canLogDate('2026-08-22', 'tomorrow'), false);
+});
+
+test('backfill: a missed day later filled in counts as done and restores the streak', () => {
+  const today = '2026-08-14';
+  const logged = ['2026-08-10', '2026-08-11', '2026-08-12', '2026-08-14']; // 13th missing
+  const before = logic.computeStreakState(S(...logged), today);
+  assert.equal(before.streak, 1);
+  assert.equal(before.bestStreak, 3);
+
+  const filled = logic.applyBackfill(S(...logged), today, bench('2026-08-13'));
+  assert.equal(filled.ok, true);
+  assert.equal(filled.created, true);
+  const after = logic.computeStreakState(filled.sessions, today);
+  assert.equal(after.streak, 5);
+  assert.equal(after.bestStreak, 5);
+  assert.equal(after.todayDone, true);
+  assert.deepEqual(filled.sessions.map(s => s.date), [...logged, '2026-08-13']);
+});
+
+test('backfill: filling the day a shield covered gives the shield back', () => {
+  const today = '2026-08-18';
+  const logged = [];
+  for (let i = 0; i < 7; i++) logged.push(logic.addDays('2026-08-10', i)); // 10th–16th, shield earned
+  const before = logic.computeStreakState(S(...logged), today);
+  assert.equal(before.shields, 0); // burned covering the 17th
+  assert.equal(before.streak, 7);
+  assert.equal(before.todayDone, false);
+
+  const filled = logic.applyBackfill(S(...logged), today, bench('2026-08-17'));
+  const after = logic.computeStreakState(filled.sessions, today);
+  assert.equal(after.shields, 1);
+  assert.equal(after.shieldProgress, 1); // only the 17th; the earn on the 16th reset progress
+  assert.equal(after.streak, 8);
+  assert.equal(after.todayDone, false);
+});
+
+test('backfill: repairing one of two misses keeps the shield burn on the day still empty', () => {
+  const today = '2026-08-19';
+  const logged = [];
+  for (let i = 0; i < 7; i++) logged.push(logic.addDays('2026-08-10', i)); // 10th–16th
+  logged.push('2026-08-19');
+  const before = logic.computeStreakState(S(...logged), today);
+  assert.equal(before.streak, 1);
+  assert.equal(before.bestStreak, 7);
+  assert.equal(before.shields, 0);
+
+  const filled = logic.applyBackfill(S(...logged), today, bench('2026-08-18'));
+  const after = logic.computeStreakState(filled.sessions, today);
+  // Shield still covers the empty 17th and is spent. 18th and 19th extend the streak.
+  assert.equal(after.shields, 0);
+  assert.equal(after.streak, 9);
+  assert.equal(after.bestStreak, 9);
+  assert.equal(after.shieldProgress, 2);
+});
+
+test('backfill: a gap inside a two-shield run earns both shields once the gap is filled', () => {
+  const today = '2026-08-14';
+  const logged = [];
+  for (let i = 0; i < 14; i++) {
+    const date = logic.addDays('2026-08-01', i);
+    if (date !== '2026-08-07') logged.push(date);
+  }
+  const before = logic.computeStreakState(S(...logged), today);
+  assert.equal(before.shields, 1);
+  assert.equal(before.streak, 7);
+
+  const filled = logic.applyBackfill(S(...logged), today, bench('2026-08-07'));
+  const after = logic.computeStreakState(filled.sessions, today);
+  assert.equal(after.shields, 2);
+  assert.equal(after.shieldProgress, 0);
+  assert.equal(after.streak, 14);
+  assert.equal(after.bestStreak, 14);
+});
+
+test('backfill: updating a logged day replaces its sets once and leaves the rest of the log', () => {
+  const kept = { date: '2026-08-20', sets: [{ kg: 40, reps: 8 }], completedAt: 'keep', note: 'original' };
+  const target = { date: '2026-08-21', sets: [{ kg: 50, reps: 8 }], completedAt: 'original-time', extra: true };
+  const duplicate = { date: '2026-08-21', sets: [{ kg: 30, reps: 5 }], completedAt: 'second' };
+  const sessions = [kept, target, duplicate];
+
+  const updated = logic.applyBackfill(sessions, '2026-08-22', {
+    date: '2026-08-21',
+    sets: [{ kg: 70, reps: 5 }, { kg: 70, reps: 5 }],
+    completedAt: 'should-not-replace',
+  });
+  assert.equal(updated.ok, true);
+  assert.equal(updated.created, false);
+  assert.equal(updated.sessions.length, 3);
+  assert.equal(updated.sessions[0], kept);
+  assert.notEqual(updated.sessions[1], target);
+  assert.equal(updated.sessions[1].completedAt, 'original-time');
+  assert.equal(updated.sessions[1].extra, true);
+  assert.deepEqual(updated.sessions[1].sets, [{ kg: 70, reps: 5 }, { kg: 70, reps: 5 }]);
+  assert.equal(updated.sessions[2], duplicate);
+  assert.deepEqual(target.sets, [{ kg: 50, reps: 8 }]);
+
+  assert.equal(logic.computeTonnage(updated.sessions), 40 * 8 + 70 * 5 + 70 * 5 + 30 * 5);
+  const streak = logic.computeStreakState(updated.sessions, '2026-08-22');
+  assert.equal(streak.streak, 2);
+  assert.equal(streak.todayDone, false);
+
+  const again = logic.applyBackfill(updated.sessions, '2026-08-22', bench('2026-08-21'));
+  assert.equal(again.created, false);
+  assert.equal(again.sessions.length, 3);
+});
+
+test('backfill: a future day is rejected and the log is left untouched', () => {
+  const sessions = S('2026-08-22');
+  const rejected = logic.applyBackfill(sessions, '2026-08-22', bench('2026-08-23'));
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.sessions, sessions);
+  assert.equal(logic.computeStreakState(rejected.sessions, '2026-08-22').streak, 1);
+  assert.deepEqual(logic.applyBackfill(sessions, '2026-08-22', { date: '2026-08-21', sets: [] }), {
+    ok: false,
+    error: 'Need at least one set',
+    sessions,
+  });
+  assert.equal(logic.applyBackfill(sessions, '2026-08-22', {
+    date: '2026-08-21',
+    sets: [{ kg: 60, reps: 0 }],
+  }).ok, false);
+});
+
+test('backfill: logging today marks today done and is allowed', () => {
+  const filled = logic.applyBackfill([], '2026-08-22', bench('2026-08-22'));
+  assert.equal(filled.ok, true);
+  assert.equal(filled.created, true);
+  const streak = logic.computeStreakState(filled.sessions, '2026-08-22');
+  assert.equal(streak.todayDone, true);
+  assert.equal(streak.streak, 1);
+  assert.equal(filled.sessions[0].completedAt, 'at-2026-08-22');
+});
+
+test('backfill: stats derived from the log include the filled-in day', () => {
+  const today = '2026-08-22'; // Saturday; this Monday is 2026-08-17
+  const existing = [{ date: '2026-08-20', sets: [{ kg: 40, reps: 10 }] }]; // Thursday, 400
+  const filled = logic.applyBackfill(existing, today, {
+    date: '2026-08-21',
+    sets: [{ kg: 55, reps: 8 }],
+    completedAt: 'later',
+  });
+  assert.equal(logic.computeTonnage(filled.sessions), 400 + 440);
+  assert.deepEqual(logic.computePRs(filled.sessions), { maxWeight: 55, maxSessionVolume: 440 });
+
+  const weeks = logic.weeklyVolumes(filled.sessions, today, 1);
+  assert.deepEqual(weeks[0], { weekStart: '2026-08-17', volume: 840 });
+
+  const heat = logic.heatmapData(filled.sessions, today, 3);
+  assert.deepEqual(heat, [
+    { date: '2026-08-20', done: true },
+    { date: '2026-08-21', done: true },
+    { date: '2026-08-22', done: false },
+  ]);
+});
+
+test('dayRequirementsMet: bench alone completes a day before the plank cutover', () => {
+  assert.equal(logic.dayRequirementsMet('2026-09-16', true, [], '2026-09-17'), true);
+  assert.equal(logic.dayRequirementsMet('2026-09-16', false, [], '2026-09-17'), false);
+  assert.equal(logic.dayRequirementsMet('2026-09-16', true, [], undefined), true);
+});
+
+test('dayRequirementsMet: on and after the cutover a plank is required before the day counts', () => {
+  const date = '2026-09-17';
+  const from = '2026-09-17';
+  assert.equal(logic.dayRequirementsMet(date, true, [], from), false);
+  assert.equal(logic.dayRequirementsMet(date, true, [{ date, seconds: 3 }], from), false);
+
+  const added = logic.appendPlank([], '2026-09-18', { date, seconds: 45, completedAt: 'p' });
+  assert.equal(added.ok, true);
+  assert.equal(logic.dayRequirementsMet(date, true, added.planks, from), true);
+  assert.equal(logic.dayRequirementsMet(date, false, added.planks, from), false);
+
+  const sessions = logic.applyBackfill([], '2026-09-18', bench(date));
+  const streak = logic.computeStreakState(sessions.sessions, '2026-09-18');
+  assert.equal(streak.streak, 1);
+  assert.equal(streak.todayDone, false);
+  assert.equal(streak.shields, 0);
+});
+
+test('appendPlank: past and today append, future and short planks do not change the log', () => {
+  const existing = [{ date: '2026-09-16', seconds: 30, completedAt: 'old' }];
+  const added = logic.appendPlank(existing, '2026-09-18', {
+    date: '2026-09-17',
+    seconds: 50,
+    completedAt: 'new',
+  });
+  assert.equal(added.ok, true);
+  assert.equal(added.planks.length, 2);
+  assert.equal(added.planks[0], existing[0]);
+  assert.deepEqual(added.planks[1], { date: '2026-09-17', seconds: 50, completedAt: 'new' });
+  assert.equal(existing.length, 1);
+
+  const future = logic.appendPlank(existing, '2026-09-18', { date: '2026-09-19', seconds: 50 });
+  assert.equal(future.ok, false);
+  assert.equal(future.planks, existing);
+  const tooShort = logic.appendPlank(existing, '2026-09-18', { date: '2026-09-17', seconds: 4 });
+  assert.equal(tooShort.ok, false);
+  assert.equal(tooShort.planks, existing);
+  assert.equal(logic.plankSecondsOn(existing, '2026-09-16'), 30);
+});

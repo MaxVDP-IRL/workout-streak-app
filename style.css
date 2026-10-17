@@ -50,6 +50,44 @@ h2 { font-size: 15px; color: var(--text-dim); text-transform: uppercase; letter-
   margin-bottom: 10px;
 }
 
+/* ---- Today: day navigation ---- */
+.day-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 0 12px;
+}
+.day-arrow {
+  width: 48px;
+  height: 48px;
+  border: none;
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.day-arrow:disabled { opacity: 0.25; }
+.day-label {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  text-align: center;
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.day-nav-title { font-size: 20px; font-weight: 800; line-height: 1.15; }
+.day-nav-sub { color: var(--text-dim); font-size: 13px; font-weight: 500; }
+.day-hint { text-align: center; margin: 0 0 10px; }
+
 /* ---- Today: set rows ---- */
 .set-row {
   display: flex;
@@ -62,6 +100,7 @@ h2 { font-size: 15px; color: var(--text-dim); text-transform: uppercase; letter-
   margin-bottom: 10px;
 }
 .set-row.done { opacity: 0.55; }
+.set-row.logged { opacity: 1; }
 .set-values { display: flex; align-items: center; gap: 4px; font-size: 17px; font-weight: 600; }
 .set-values .unit { color: var(--text-dim); font-size: 13px; font-weight: 400; }
 
@@ -88,6 +127,7 @@ h2 { font-size: 15px; color: var(--text-dim); text-transform: uppercase; letter-
   flex-shrink: 0;
 }
 .check-btn.checked { background: var(--good); color: #06220f; }
+.check-btn.locked { pointer-events: none; }
 
 #today-status { text-align: center; color: var(--text-dim); font-size: 14px; margin: 10px 0; }
 #today-status.done-msg { color: var(--good); font-weight: 600; }
@@ -149,6 +189,14 @@ svg.chart { width: 100%; height: auto; display: block; }
 .equiv-list .locked { color: var(--text-dim); opacity: 0.5; }
 
 .plank-card { text-align: center; }
+.plank-entry { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.plank-entry .wide-btn { margin-top: 0; }
+.plank-entry .stepper .val {
+  min-width: 84px;
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--accent);
+}
 .plank-clock { font-size: 44px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--accent); text-align: center; margin-bottom: 10px; }
 .plank-done { color: var(--good); font-weight: 600; text-align: center; margin-bottom: 10px; }
 
